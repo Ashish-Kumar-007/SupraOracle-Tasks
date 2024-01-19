@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -18,12 +18,7 @@ contract TokenSwap is Ownable {
     uint256 public exchangeRate; // Constant exchange rate (e.g., 1 token1 = X token2)
 
     // Events for logging swap events
-    event TokenSwap(
-        address indexed sender,
-        SwapDirection direction,
-        uint256 amountIn,
-        uint256 amountOut
-    );
+    event TokenSwap(address indexed sender, SwapDirection direction, uint256 amountIn, uint256 amountOut);
 
     // Constructor to set initial parameters
     constructor(IERC20 _token1, IERC20 _token2, uint256 _exchangeRate) {
@@ -41,9 +36,7 @@ contract TokenSwap is Ownable {
     function swapTokens(uint256 amountIn, SwapDirection direction) external {
         uint256 amountOut;
 
-        amountOut = (direction == SwapDirection.Token1ToToken2)
-            ? amountIn * exchangeRate
-            : amountIn / exchangeRate;
+        amountOut = (direction == SwapDirection.Token1ToToken2) ? amountIn * exchangeRate : amountIn / exchangeRate;
 
         _performTokenSwap(
             (direction == SwapDirection.Token1ToToken2) ? token1 : token2,
@@ -58,13 +51,9 @@ contract TokenSwap is Ownable {
     }
 
     // Internal function to perform the token swap
-    function _performTokenSwap(
-        IERC20 fromToken,
-        IERC20 toToken,
-        address recipient,
-        uint256 amountIn,
-        uint256 amountOut
-    ) internal {
+    function _performTokenSwap(IERC20 fromToken, IERC20 toToken, address recipient, uint256 amountIn, uint256 amountOut)
+        internal
+    {
         fromToken.safeTransferFrom(msg.sender, address(this), amountIn);
         toToken.safeTransfer(recipient, amountOut);
     }
