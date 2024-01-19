@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.19;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 contract VotingSystem is Ownable {
     uint256 candidatesCount = 0;
+    uint256 deadline = 0;
+    uint256 private winningCandidateId = 0;
 
     struct Candidate {
         string name;
@@ -18,14 +20,21 @@ contract VotingSystem is Ownable {
     }
 
     mapping(uint256 => Candidate) private candidates;
-    mapping(address => Voter) private voter;
+    mapping(address => Voter) private voters;
+
+    event voted(address user, uint256 candidateId, bool voted);
+    event candidateAdded(uint candidateId, string name);
+    event candidateDetails(uint candidateId, string name, uint voteCount);
+    event userRegistered(address user, bool registered);
+    event Winner(uint256 candidateId);
 
     constructor() {
-        CandidateCounts += 1;
+        candidatesCount += 1;
+        deadline = block.timestamp + 5 minutes;
     }
 
     modifier isRegistered() {
-        require(!voter[msg.sender].isRegistered, "Not registered");
+        require(!voters[msg.sender].isRegistered, "Not registered");
         _;
     }
 
@@ -36,20 +45,43 @@ contract VotingSystem is Ownable {
 
     function addCandidate(string calldata _name) public onlyOwner {
         require(bytes(_name).length > 0, "Invalid name");
-        candidates[CandidateCounts.current()] = Candidate(_name, 0);
-        CandidateCounts.increment();
+        candidates[candidatesCount] = Candidate(_name, 0);
+        candidatesCount += 1;
+
+        emit candidateAdded(candidatesCount-1, _name);
     }
 
     function register() public {
         require(!voters[msg.sender].isRegistered, "Already registered");
         voters[msg.sender].isRegistered = true;
+
+        emit userRegistered(msg.sender, true);
     }
 
     function vote(uint256 _candidateId) public isRegistered hasVoted {
-        require(_candidateId > 0 && _candidateId <= CandidateCounts.current(), "Invalid id");
+        require(_candidateId > 0 && _candidateId <= candidatesCount, "Invalid id");
+        require(block.timestamp < deadline, "Voting has already closed");
         candidates[_candidateId].voteCount += 1;
 
         voters[msg.sender].hasVoted = true;
         voters[msg.sender].votedCandidateId = _candidateId;
+
+        if (candidates[_candidateId].voteCount > candidates[winningCandidateId].voteCount) {
+            winningCandidateId = _candidateId;
+        }
+
+        emit voted(msg.sender, _candidateId, true);
+    }
+
+    function getWinningCandidateId() public view returns (uint256) {
+        require(block.timestamp >= deadline, "Voting is still open");
+        emit Winner(winningCandidateId);
+        return winningCandidateId;
+    }
+
+    function getCandidateDetails(uint _candidateId) public view returns (Candidate memory) {
+        require(block.timestamp >= deadline, "Voting is still open");
+        emit candidateDetails(_candidateId, candidates[_candidateId].name, candidates[_candidateId].voteCount);
+        return candidates[_candidateId];
     }
 }
