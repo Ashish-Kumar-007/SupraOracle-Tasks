@@ -1,94 +1,144 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
-// Import Truffle testing library
-import {Test, console} from "forge-std/Test.sol";
+import "forge-std/Test.sol";
+import "forge-std/console2.sol";
+import {TestToken} from "../src/Mock/TestToken.sol";
 import {TokenSwap} from "../src/TokenSwap.sol";
 
-contract TestTokenSwap {
-    // Initialize the contract with some initial values
-    IERC20 private token1 = IERC20(DeployedAddresses.Token1()); // Replace with your actual Token1 contract address
-    IERC20 private token2 = IERC20(DeployedAddresses.Token2()); // Replace with your actual Token2 contract address
-    uint256 private initialExchangeRate = 100;
 
-    TokenSwap private tokenSwap;
+contract SwapTokenTest is Test {
+    TokenSwap public swapToken;
+    TestToken public tokenA;
+    TestToken public tokenB;
 
-    function beforeEach() public {
-        tokenSwap = new TokenSwap(token1, token2, initialExchangeRate);
+    address public testUser1;
+    address public testUser2;
+
+    function setUp() public {
+        tokenA = new TestToken("Token A", "TKNA");
+        tokenB = new TestToken("Token B", "TKNB");
+
+        uint256 exchangeRate = 2;
+
+        swapToken = new TokenSwap(address(tokenA), address(tokenB), exchangeRate);
+
+        testUser1 = address(0x100);
+        testUser2 = address(0x101);
+
+        tokenA.mint(testUser1, 500 ether); 
+        tokenB.mint(testUser2, 500 ether);
+
+        tokenA.mint(address(swapToken), 500 ether); 
+        tokenB.mint(address(swapToken), 500 ether);
     }
 
-    // Test that the constructor sets the correct initial values
-    function testInitialValues() public {
-        Assert.equal(tokenSwap.token1(), token1, "Token1 address is incorrect");
-        Assert.equal(tokenSwap.token2(), token2, "Token2 address is incorrect");
-        Assert.equal(tokenSwap.exchangeRate(), initialExchangeRate, "Exchange rate is incorrect");
+    function testSwapWithoutApproval() public {
+        // Initial balance checks (optional but good for thorough testing)
+        uint256 initialUser1TokenABalance = tokenA.balanceOf(testUser1);
+        uint256 initialContractTokenBBalance = tokenB.balanceOf(address(swapToken));
+
+        // Expect the contract to revert the transaction due to insufficient allowance
+        vm.prank(testUser1);
+        vm.expectRevert(abi.encodeWithSignature("InsufficientAllowance()"));
+        swapToken.swapTokens(100 ether, TokenSwap.SwapDirection.AtoB);
+
+        // Balance checks to confirm no tokens were transferred
+        uint256 finalUser1TokenABalance = tokenA.balanceOf(testUser1);
+        uint256 finalContractTokenBBalance = tokenB.balanceOf(address(swapToken));
+
+
+        // Assert that the balances remain unchanged
+        assertEq(initialUser1TokenABalance, finalUser1TokenABalance, "User's Token A balance should not change");
+        assertEq(initialContractTokenBBalance, finalContractTokenBBalance, "Contract's Token B balance should not change");
     }
 
-    // Test that only the owner can update the exchange rate
-    function testUpdateExchangeRate() public {
-        uint256 newExchangeRate = 150;
-        tokenSwap.updateExchangeRate(newExchangeRate);
-        Assert.equal(tokenSwap.exchangeRate(), newExchangeRate, "Exchange rate not updated");
+    function testSwapWithInsufficientApproval() public {
+        // Initial balance checks
+        uint256 initialUser1TokenABalance = tokenA.balanceOf(testUser1);
+        uint256 initialContractTokenBBalance = tokenB.balanceOf(address(swapToken));
 
-        // Try updating exchange rate from a non-owner address, should revert
-        TokenSwap nonOwnerSwap = new TokenSwap(token1, token2, initialExchangeRate);
-        bool success = nonOwnerSwap.call(abi.encodeWithSignature("updateExchangeRate(uint256)", newExchangeRate));
-        Assert.isFalse(success, "Non-owner was able to update exchange rate");
+        // Approve the SwapToken contract to spend 50 Token A from testUser1's account
+        vm.prank(testUser1);
+        tokenA.approve(address(swapToken), 50 ether);
+
+        // Attempt to swap 100 Token A, which should fail due to insufficient allowance
+        vm.prank(testUser1);
+        vm.expectRevert(abi.encodeWithSignature("InsufficientAllowance()"));
+        swapToken.swapTokens(100 ether, TokenSwap.SwapDirection.AtoB);
+
+        // Check final balances to ensure no tokens were transferred
+        uint256 finalUser1TokenABalance = tokenA.balanceOf(testUser1);
+        uint256 finalContractTokenBBalance = tokenB.balanceOf(address(swapToken));
+
+        // Assert that the balances remain unchanged
+        assertEq(initialUser1TokenABalance, finalUser1TokenABalance, "User's Token A balance should not change");
+        assertEq(initialContractTokenBBalance, finalContractTokenBBalance, "Contract's Token B balance should not change");
     }
 
-    // Test token swap function
-    function testTokenSwap() public {
-        uint256 amountIn = 10;
-        uint256 expectedAmountOut = amountIn * initialExchangeRate;
+    function testSuccessfulSwap() public {
+        // Initial balance checks for Token B of User 1 and Token A of the contract
+        uint256 initialBalanceTokenBUser1 = tokenB.balanceOf(testUser1);
+        uint256 initialBalanceTokenAContract = tokenA.balanceOf(address(swapToken)); 
 
-        // Perform Token1 to Token2 swap
-        tokenSwap.swapTokens(amountIn, TokenSwap.SwapDirection.Token1ToToken2);
-        Assert.equal(
-            tokenSwap.token1().balanceOf(address(tokenSwap)), amountIn, "Token1 balance in contract is incorrect"
-        );
-        Assert.equal(
-            tokenSwap.token2().balanceOf(msg.sender), expectedAmountOut, "Token2 balance for the sender is incorrect"
-        );
+        // User 1 approves the SwapToken contract to spend 100 Token A
+        vm.prank(testUser1);
+        tokenA.approve(address(swapToken), 100 ether);
 
-        // Perform Token2 to Token1 swap
-        tokenSwap.swapTokens(amountIn, TokenSwap.SwapDirection.Token2ToToken1);
-        Assert.equal(
-            tokenSwap.token2().balanceOf(address(tokenSwap)), amountIn, "Token2 balance in contract is incorrect"
-        );
-        Assert.equal(
-            tokenSwap.token1().balanceOf(msg.sender), expectedAmountOut, "Token1 balance for the sender is incorrect"
-        );
+        // User 1 swaps 100 Token A for Token B
+        vm.prank(testUser1);
+        swapToken.swapTokens(100 ether, TokenSwap.SwapDirection.AtoB);
+
+        // Final balance checks for Token B of User 1 and Token A of the contract
+        uint256 finalBalanceTokenBUser1 = tokenB.balanceOf(testUser1);
+        uint256 finalBalanceTokenAContract = tokenA.balanceOf(address(swapToken));
+
+        // Assert final balances to check if the swap was successful
+        assertEq(finalBalanceTokenBUser1, initialBalanceTokenBUser1 + finalBalanceTokenBUser1, "User did not receive correct amount of Token B");
+        assertEq(finalBalanceTokenAContract, initialBalanceTokenAContract + 100 ether, "Contract did not receive correct amount of Token A");
     }
 
-    // Test that attempting to update the exchange rate from a non-owner address fails
-    function testUpdateExchangeRateFail() public {
-        uint256 newExchangeRate = 150;
+    function testSuccessfulSwapAndReverseSwap() public {
+    // Initial balance checks for both tokens
+    uint256 initialBalanceTokenAUser1 = tokenA.balanceOf(testUser1);
+    uint256 initialBalanceTokenBUser1 = tokenB.balanceOf(testUser1);
+    uint256 initialBalanceTokenAContract = tokenA.balanceOf(address(swapToken));
+    uint256 initialBalanceTokenBContract = tokenB.balanceOf(address(swapToken));
 
-        // Attempt to update exchange rate from a non-owner address, should revert
-        TokenSwap nonOwnerSwap = new TokenSwap(token1, token2, initialExchangeRate);
-        bool success = nonOwnerSwap.call(abi.encodeWithSignature("updateExchangeRate(uint256)", newExchangeRate));
-        Assert.isFalse(success, "Non-owner was able to update exchange rate");
-    }
+    // User 1 swaps 100 Token A for Token B
+    vm.prank(testUser1);
+    tokenA.approve(address(swapToken), 100 ether);
+    vm.prank(testUser1);
+    swapToken.swapTokens(100 ether, TokenSwap.SwapDirection.AtoB);
 
-    // Test that attempting to swap tokens with an invalid direction fails
-    function testInvalidSwapDirection() public {
-        uint256 amountIn = 10;
+    // Check balances after first swap
+    uint256 afterSwap1BalanceTokenAUser1 = tokenA.balanceOf(testUser1);
+    uint256 afterSwap1BalanceTokenBUser1 = tokenB.balanceOf(testUser1);
+    assertEq(afterSwap1BalanceTokenAUser1, initialBalanceTokenAUser1 - 100 ether, "User's Token A balance incorrect after swap");
+    assertEq(afterSwap1BalanceTokenBUser1, initialBalanceTokenBUser1 + 200 ether, "User's Token B balance incorrect after swap");
 
-        // Attempt to swap with an invalid direction, should revert
-        bool success = tokenSwap.call(abi.encodeWithSignature("swapTokens(uint256,uint8)", amountIn, uint8(2)));
-        Assert.isFalse(success, "Invalid swap direction did not revert");
-    }
+    // User 1 swaps 200 Token B for Token A (Reverse Swap)
+    vm.prank(testUser1);
+    tokenB.approve(address(swapToken), 200 ether);
+    vm.prank(testUser1);
+    swapToken.swapTokens(200 ether, TokenSwap.SwapDirection.BtoA);
 
-    // Test that attempting to swap tokens with insufficient balance fails
-    function testInsufficientBalance() public {
-        uint256 amountIn = 100; // Assuming the contract has insufficient balance
+    // Check balances after reverse swap
+    uint256 finalBalanceTokenAUser1 = tokenA.balanceOf(testUser1);
+    uint256 finalBalanceTokenBUser1 = tokenB.balanceOf(testUser1);
+    assertEq(finalBalanceTokenAUser1, afterSwap1BalanceTokenAUser1 + 100 ether, "User's Token A balance incorrect after reverse swap");
+    assertEq(finalBalanceTokenBUser1, afterSwap1BalanceTokenBUser1 - 200 ether, "User's Token B balance incorrect after reverse swap");
 
-        // Attempt to swap tokens with insufficient balance, should revert
-        bool success = tokenSwap.call(
-            abi.encodeWithSignature(
-                "swapTokens(uint256,uint8)", amountIn, uint8(TokenSwap.SwapDirection.Token1ToToken2)
-            )
-        );
-        Assert.isFalse(success, "Insufficient balance did not revert");
-    }
+    // Console log for debugging
+    console.log("Initial Token A User1 Balance:", initialBalanceTokenAUser1);
+    console.log("Initial Token B User1 Balance:", initialBalanceTokenBUser1);
+    console.log("Initial Token A Contract Balance:", initialBalanceTokenAContract);
+    console.log("Initial Token B Contract Balance:", initialBalanceTokenBContract);
+    console.log("After Swap 1 Token A User1 Balance:", afterSwap1BalanceTokenAUser1);
+    console.log("After Swap 1 Token B User1 Balance:", afterSwap1BalanceTokenBUser1);
+    console.log("Final Token A User1 Balance:", finalBalanceTokenAUser1);
+    console.log("Final Token B User1 Balance:", finalBalanceTokenBUser1);
+}
+
+
 }
