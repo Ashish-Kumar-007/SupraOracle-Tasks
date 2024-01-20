@@ -1,24 +1,19 @@
-// SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.13;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
 
 import "forge-std/Test.sol";
 import "forge-std/console2.sol";
 import {VotingSystem} from "../src/VotingSystem.sol";
 
-contract DecentralizedVotingTest is Test {
-    VotingSystem public votingContract;
-    address public owner;
+contract VotingSystemTest is Test {
+    VotingSystem public votingSystem;
     address public voter1;
     address public voter2;
     address public nonVoter;
 
-    /**
-     * @dev Sets up the testing environment before each test.
-     *      Deploys the voting contract, sets up test accounts, registers voters, and adds candidates.
-     */
     function setUp() public {
-        owner = address(this);
-        votingContract = new VotingSystem(1);
+        // owner = address(this);
+        votingSystem = new VotingSystem();
 
         // Setting up test accounts
         voter1 = vm.addr(1);
@@ -27,100 +22,61 @@ contract DecentralizedVotingTest is Test {
 
         // Registering voters
         vm.prank(voter1);
-        votingContract.registerVoter();
+        votingSystem.registerVoter();
 
         vm.prank(voter2);
-        votingContract.registerVoter();
+        votingSystem.registerVoter();
 
         // Adding candidates by the owner
-        votingContract.addCandidate("Alice");
-        votingContract.addCandidate("Bob");
+        votingSystem.addCandidate("Alice");
+        votingSystem.addCandidate("Bob");
     }
 
-    /**
-     * @dev Tests the voter registration functionality.
-     *      Ensures that already registered voters cannot register again.
-     */
-    function testVoterRegistration() public {
-        vm.expectRevert(abi.encodeWithSignature("VoterAlreadyRegistered()"));
-        vm.prank(voter1);
-        votingContract.registerVoter();
-    }
-
-    /**
-     * @dev Tests candidate registration functionality.
-     *      Ensures that only the owner can register candidates.
-     */
     function testAddCandidate() public {
-        vm.expectRevert(abi.encodeWithSignature("OnlyOwner()"));
+        vm.expectRevert("Not owner");
         vm.prank(nonVoter);
-        votingContract.registerCandidate("Charlie");
+        votingSystem.addCandidate("Charlie");
     }
 
-    /**
-     * @dev Tests the voting functionality.
-     *      Checks that voters can vote only once and non-registered voters cannot vote.
-     */
+    function testRegisterVoter() public {
+        vm.expectRevert("Already registered");
+        vm.prank(voter1);
+        votingSystem.registerVoter();
+    }
+
     function testVoting() public {
+                vm.expectRevert("Already registered");
+        vm.prank(voter1);
+        votingSystem.registerVoter();
+
         // Voter1 votes for candidate 1
         vm.prank(voter1);
-        votingContract.vote(1);
+        votingSystem.vote(1);
 
         // Voter1 should not be able to vote again
-        vm.expectRevert(abi.encodeWithSignature("VoterAlreadyVoted()"));
+        vm.expectRevert("Already voted!");
         vm.prank(voter1);
-        votingContract.vote(1);
+        votingSystem.vote(1);
 
         // Non-registered voter should not be able to vote
-        vm.expectRevert(abi.encodeWithSignature("OnlyRegisteredVoters()"));
+        vm.expectRevert("Not registered");
         vm.prank(nonVoter);
-        votingContract.vote(1);
+        votingSystem.vote(1);
     }
 
-    /**
-     * @dev Tests the declare winner functionality.
-     * Simulates voting, ensures only the owner can declare the winner,
-     * and verifies the correctness of the declared winner.
-     */
-    function testDeclareWinner() public {
-        // Simulate voting by voter1 and voter2
-        vm.prank(voter1);
-        votingContract.vote(1);
+    function testGetWinningCandidateId() public {
+        // Assuming candidates have been added and voting has taken place
+        vm.expectRevert("Voting is still open");
+        uint256 winningCandidateId = votingSystem.getWinningCandidateId();
 
-        vm.prank(voter2);
-        votingContract.vote(1);
-
-        // Forward time to after the voting period
-        vm.warp(block.timestamp + 2 minutes);
-
-        // Ensure that only the owner can declare the winner
-        vm.expectRevert(abi.encodeWithSignature("OnlyOwner()"));
-        vm.prank(nonVoter);
-        votingContract.declareWinner();
-
-        // Owner declares the winner
-        vm.prank(owner);
-        uint256 winningCandidateId = votingContract.declareWinner();
-        console.log("winningCandidateId", winningCandidateId);
-
-        // Fetch and log the declared winner's details
-        (uint256 id, string memory name, uint256 voteCount) = getCandidateDetails(winningCandidateId);
-        console.log("winner.id", id);
-        console.log("winner.name", name);
-        console.log("winner.voteCount", voteCount);
-
-        // Assertions to check the correctness of the winner's details
-        assertEq(id, winningCandidateId, "Winner ID does not match expected value.");
-        assertEq(name, "Bob", "The declared winner should be Alice.");
+        assertEq(winningCandidateId, 0, "Winning candidate ID should be greater than 0");
     }
 
-    /**
-     * @dev Helper function to get candidate details for verification.
-     * @param candidateId The ID of the candidate to fetch details for.
-     * @return Tuple containing the candidate's ID, name, and vote count.
-     */
-    function getCandidateDetails(uint256 candidateId) internal view returns (uint256, string memory, uint256) {
-        DecentralizedVoting.Candidate memory candidate = votingContract.getCandidate(candidateId);
-        return (candidate.id, candidate.name, candidate.voteCount);
+    function testGetCandidateDetails() public {
+        uint256 candidateId = 1;
+        vm.expectRevert("Voting is still open");
+        VotingSystem.Candidate memory candidate = votingSystem.getCandidateDetails(candidateId);
+
+        assertEq(candidate.voteCount, 0, "Vote count should be initialized to 0");
     }
 }

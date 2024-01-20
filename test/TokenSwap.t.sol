@@ -3,21 +3,21 @@ pragma solidity ^0.8.13;
 
 import "forge-std/Test.sol";
 import "forge-std/console2.sol";
-import {TestToken} from "../src/Mock/TestToken.sol";
+import {MockERC20Token} from "../src/mocks/MockERC20Token.sol";
 import {TokenSwap} from "../src/TokenSwap.sol";
 
 
-contract SwapTokenTest is Test {
+contract TOkenSwapTest is Test {
     TokenSwap public swapToken;
-    TestToken public tokenA;
-    TestToken public tokenB;
+    MockERC20Token public tokenA;
+    MockERC20Token public tokenB;
 
     address public testUser1;
     address public testUser2;
 
     function setUp() public {
-        tokenA = new TestToken("Token A", "TKNA");
-        tokenB = new TestToken("Token B", "TKNB");
+        tokenA = new MockERC20Token("Token A", "TKNA");
+        tokenB = new MockERC20Token("Token B", "TKNB");
 
         uint256 exchangeRate = 2;
 

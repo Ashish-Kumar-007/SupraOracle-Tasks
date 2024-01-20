@@ -1,60 +1,50 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.13;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-contract TokenSwap is Ownable {
-    using SafeERC20 for IERC20;
+interface IERC20 {
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+    function allowance(address owner, address spender) external view returns (uint256);
+}
 
-    enum SwapDirection {
-        Token1ToToken2,
-        Token2ToToken1
-    }
+contract TokenSwap is ReentrancyGuard {
+    IERC20 public immutable tokenA;
+    IERC20 public immutable tokenB;
+    uint256 public immutable exchangeRate;
 
-    IERC20 public token1; // Token1 instance
-    IERC20 public token2; // Token2 instance
-    uint256 public exchangeRate; // Constant exchange rate (e.g., 1 token1 = X token2)
+    enum SwapDirection { AtoB, BtoA }
+    event Swap(address indexed user, uint256 amountIn, uint256 amountOut, string direction);
 
-    // Events for logging swap events
-    event TokenSwap(address indexed sender, SwapDirection direction, uint256 amountIn, uint256 amountOut);
+    error InsufficientBalance();
+    error InsufficientAllowance();
+    error TransferFailed();
 
-    // Constructor to set initial parameters
-    constructor(IERC20 _token1, IERC20 _token2, uint256 _exchangeRate) {
-        token1 = _token1;
-        token2 = _token2;
+    constructor(address _tokenA, address _tokenB, uint256 _exchangeRate) {
+        tokenA = IERC20(_tokenA);
+        tokenB = IERC20(_tokenB);
         exchangeRate = _exchangeRate;
     }
 
-    // Function to update the exchange rate, can only be called by the owner
-    function updateExchangeRate(uint256 newRate) external onlyOwner {
-        exchangeRate = newRate;
+    function swapTokens(uint256 amount, SwapDirection direction) external nonReentrant {
+        if (amount <= 0) revert InsufficientBalance();
+
+        IERC20 tokenIn = (direction == SwapDirection.AtoB) ? tokenA : tokenB;
+        IERC20 tokenOut = (direction == SwapDirection.AtoB) ? tokenB : tokenA;
+        uint256 amountOut = (direction == SwapDirection.AtoB) ? amount * exchangeRate : amount / exchangeRate;
+
+        handleTransfer(tokenIn, msg.sender, address(this), amount);
+        handleTransfer(tokenOut, address(this), msg.sender, amountOut);
+        emit Swap(msg.sender, amount, amountOut, direction == SwapDirection.AtoB ? "A for B" : "B for A");
     }
 
-    // Function to swap tokens
-    function swapTokens(uint256 amountIn, SwapDirection direction) external {
-        uint256 amountOut;
-
-        amountOut = (direction == SwapDirection.Token1ToToken2) ? amountIn * exchangeRate : amountIn / exchangeRate;
-
-        _performTokenSwap(
-            (direction == SwapDirection.Token1ToToken2) ? token1 : token2,
-            (direction == SwapDirection.Token1ToToken2) ? token2 : token1,
-            msg.sender,
-            amountIn,
-            amountOut
-        );
-
-        // Emit an event to log the swap
-        emit TokenSwap(msg.sender, direction, amountIn, amountOut);
-    }
-
-    // Internal function to perform the token swap
-    function _performTokenSwap(IERC20 fromToken, IERC20 toToken, address recipient, uint256 amountIn, uint256 amountOut)
-        internal
-    {
-        fromToken.safeTransferFrom(msg.sender, address(this), amountIn);
-        toToken.safeTransfer(recipient, amountOut);
+    function handleTransfer(IERC20 token, address from, address to, uint256 amount) internal {
+        if (token.balanceOf(from) < amount) revert InsufficientBalance();
+        if (from != address(this) && token.allowance(from, address(this)) < amount) revert InsufficientAllowance();
+        
+        bool success = from == address(this) ? token.transfer(to, amount) : token.transferFrom(from, to, amount);
+        if (!success) revert TransferFailed();
     }
 }

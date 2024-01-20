@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
-
-contract VotingSystem is Ownable {
-    uint256 candidatesCount = 0;
+contract VotingSystem {
+    address public immutable owner;
+    uint256 public candidatesCount = 0;
     uint256 deadline = 0;
     uint256 private winningCandidateId = 0;
 
@@ -20,7 +19,7 @@ contract VotingSystem is Ownable {
     }
 
     mapping(uint256 => Candidate) private candidates;
-    mapping(address => Voter) private voters;
+    mapping(address => Voter) public voters;
 
     event voted(address user, uint256 candidateId, bool voted);
     event candidateAdded(uint256 candidateId, string name);
@@ -29,8 +28,14 @@ contract VotingSystem is Ownable {
     event Winner(uint256 candidateId);
 
     constructor() {
+        owner = msg.sender;
         candidatesCount += 1;
         deadline = block.timestamp + 5 minutes;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Not owner");
+        _;
     }
 
     modifier isRegistered() {
@@ -73,13 +78,13 @@ contract VotingSystem is Ownable {
         emit voted(msg.sender, _candidateId, true);
     }
 
-    function getWinningCandidateId() public view returns (uint256) {
+    function getWinningCandidateId() public returns (uint256) {
         require(block.timestamp >= deadline, "Voting is still open");
         emit Winner(winningCandidateId);
         return winningCandidateId;
     }
 
-    function getCandidateDetails(uint256 _candidateId) public view returns (Candidate memory) {
+    function getCandidateDetails(uint256 _candidateId) public returns (Candidate memory) {
         require(block.timestamp >= deadline, "Voting is still open");
         emit candidateDetails(_candidateId, candidates[_candidateId].name, candidates[_candidateId].voteCount);
         return candidates[_candidateId];
