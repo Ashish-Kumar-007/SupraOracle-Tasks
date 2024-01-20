@@ -1,132 +1,175 @@
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+//SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.13;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+// Interface for ERC20 token standard, including transfer functionalities
+interface IERC20 {
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+}
 
-contract TokenSale is Ownable {
-    ERC20 public token; // ERC-20 token being sold
+// Extension of ERC20 interface to include burn functionality
+interface IERC20Burnable is IERC20 {
+    function burnFrom(address account, uint256 amount) external;
+}
 
-    enum SalePhase {
-        NotStarted,
-        Presale,
+/**
+ * @title TokenSale
+ * @dev Contract for managing token pre-sales and public sales.
+ *      Allows for token purchase, distribution, and refund functionalities.
+ */
+contract TokenSale {
+    enum SaleState {
+        PreSale,
         PublicSale,
-        Ended
+        PostSale
     }
 
-    SalePhase public currentPhase;
+    SaleState public currentSaleState;
 
-    uint256 public presaleCap; // Maximum cap for presale
-    uint256 public publicSaleCap; // Maximum cap for public sale
+    uint256 public totalPresaleEther;
+    uint256 public tokenRatePerEth = 1;
+    uint256 public totalPublicSaleEther;
+    uint256 public presaleCap;
+    uint256 public publicSaleCap;
+    uint256 public minContribution;
+    uint256 public maxContribution;
+    address private immutable owner;
+    uint256 public immutable publicSaleStartTime;
 
-    uint256 public presaleMinContribution; // Minimum contribution in presale
-    uint256 public presaleMaxContribution; // Maximum contribution in presale
+    mapping(address => uint256) public contributions;
+    IERC20Burnable public immutable tokenContract;
 
-    uint256 public publicSaleMinContribution; // Minimum contribution in public sale
-    uint256 public publicSaleMaxContribution; // Maximum contribution in public sale
+    // Ensures only the contract owner can execute certain functions
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert("only owner");
+        _;
+    }
 
-    mapping(address => uint256) public presaleContributions; // Track presale contributions
-    mapping(address => uint256) public publicSaleContributions; // Track public sale contributions
+    /**
+     * @dev Initializes the contract with token address and public sale start time.
+     * @param _tokenAddress Address of the token being sold
+     * @param _publicSaleStartTime Time until the start of the public sale
+     */
+    constructor(address _tokenAddress, uint256 _publicSaleStartTime) {
+        tokenContract = IERC20Burnable(_tokenAddress);
+        owner = msg.sender;
+        publicSaleStartTime = block.timestamp + _publicSaleStartTime;
+    }
 
-    event TokensPurchased(address indexed buyer, uint256 amount, uint256 etherAmount);
-    event RefundClaimed(address indexed contributor, uint256 amount);
-
-    constructor(
-        ERC20 _token,
-        uint256 _presaleCap,
-        uint256 _publicSaleCap,
-        uint256 _presaleMinContribution,
-        uint256 _presaleMaxContribution,
-        uint256 _publicSaleMinContribution,
-        uint256 _publicSaleMaxContribution
-    ) {
-        token = _token;
+    /**
+     * @dev Updates the caps for pre-sale and public sale.
+     * @param _presaleCap Cap for the pre-sale
+     * @param _publicSaleCap Cap for the public sale
+     */
+    function updateCaps(uint256 _presaleCap, uint256 _publicSaleCap) external onlyOwner {
         presaleCap = _presaleCap;
         publicSaleCap = _publicSaleCap;
-        presaleMinContribution = _presaleMinContribution;
-        presaleMaxContribution = _presaleMaxContribution;
-        publicSaleMinContribution = _publicSaleMinContribution;
-        publicSaleMaxContribution = _publicSaleMaxContribution;
-        currentPhase = SalePhase.NotStarted;
     }
 
-    modifier onlyDuringPresale() {
-        require(currentPhase == SalePhase.Presale, "Presale is not active");
-        _;
+    /**
+     * @dev Updates the contribution limits for token purchase.
+     * @param _min Minimum contribution limit
+     * @param _max Maximum contribution limit
+     */
+    function updateContributionLimits(uint256 _min, uint256 _max) external onlyOwner {
+        minContribution = _min;
+        maxContribution = _max;
     }
 
-    modifier onlyDuringPublicSale() {
-        require(currentPhase == SalePhase.PublicSale, "Public sale is not active");
-        _;
+    /**
+     * @dev Allows users to purchase tokens during the sale.
+     *      Ensures contributions are within set limits and sale is active.
+     */
+    function buyTokens() public payable {
+        SaleState state = getCurrentSaleState();
+        require(state != SaleState.PostSale, "Token sale is not active");
+        require(msg.value >= minContribution && msg.value <= maxContribution, "Contribution outside allowed limits");
+
+        updateEtherCollected(state, msg.value);
+        contributions[msg.sender] += msg.value;
+        transferFrom(msg.sender, calculateTokenAmount(msg.value));
     }
 
-    modifier saleNotEnded() {
-        require(currentPhase != SalePhase.Ended, "Sale has ended");
-        _;
-    }
-
-    function startPresale() external onlyOwner {
-        require(currentPhase == SalePhase.NotStarted, "Sale has already started");
-        currentPhase = SalePhase.Presale;
-    }
-
-    function endPresale() external onlyOwner {
-        require(currentPhase == SalePhase.Presale, "Presale is not active");
-        currentPhase = SalePhase.PublicSale;
-    }
-
-    function endSale() external onlyOwner {
-        require(currentPhase == SalePhase.PublicSale, "Public sale is not active");
-        currentPhase = SalePhase.Ended;
-    }
-
-    function contributeToPresale() external payable onlyDuringPresale saleNotEnded {
-        require(msg.value >= presaleMinContribution, "Below minimum contribution");
-        require(msg.value <= presaleMaxContribution, "Exceeds maximum contribution");
-        require(address(this).balance + msg.value <= presaleCap, "Presale cap reached");
-
-        presaleContributions[msg.sender] += msg.value;
-        distributeTokens(msg.sender, msg.value);
-    }
-
-    function contributeToPublicSale() external payable onlyDuringPublicSale saleNotEnded {
-        require(msg.value >= publicSaleMinContribution, "Below minimum contribution");
-        require(msg.value <= publicSaleMaxContribution, "Exceeds maximum contribution");
-        require(address(this).balance + msg.value <= publicSaleCap, "Public sale cap reached");
-
-        publicSaleContributions[msg.sender] += msg.value;
-        distributeTokens(msg.sender, msg.value);
-    }
-
-    function distributeTokens(address _recipient, uint256 _etherAmount) internal {
-        uint256 tokenAmount = calculateTokenAmount(_etherAmount);
-        require(tokenAmount > 0, "Invalid token amount");
-
-        token.transfer(_recipient, tokenAmount);
-        emit TokensPurchased(_recipient, tokenAmount, _etherAmount);
-    }
-
-    function calculateTokenAmount(uint256 _etherAmount) internal view returns (uint256) {
-        // Implement your own logic for token price calculation
-        // This is a basic example, you might want to consider factors like bonuses, etc.
-        // For simplicity, assuming 1 ETH = 100 tokens
-        return _etherAmount * 100;
-    }
-
-    function claimRefund() external saleNotEnded {
-        require(currentPhase == SalePhase.Ended, "Refund only available after sale ends");
-
-        uint256 refundAmount = 0;
-        if (currentPhase == SalePhase.Presale) {
-            refundAmount = presaleContributions[msg.sender];
-            presaleContributions[msg.sender] = 0;
-        } else if (currentPhase == SalePhase.PublicSale) {
-            refundAmount = publicSaleContributions[msg.sender];
-            publicSaleContributions[msg.sender] = 0;
+    /**
+     * @dev Internal function to update ether collected based on the sale state.
+     * @param state Current sale state
+     * @param value Contribution value in ether
+     */
+    function updateEtherCollected(SaleState state, uint256 value) internal {
+        if (state == SaleState.PreSale) {
+            require(totalPresaleEther + value <= presaleCap, "Presale cap exceeded");
+            totalPresaleEther += value;
+        } else {
+            require(totalPublicSaleEther + value <= publicSaleCap, "Public sale cap exceeded");
+            totalPublicSaleEther += value;
         }
+    }
 
-        require(refundAmount > 0, "No refund available");
-        payable(msg.sender).transfer(refundAmount);
-        emit RefundClaimed(msg.sender, refundAmount);
+    /**
+     * @dev Allows the owner to distribute tokens.
+     * @param _to Address of the recipient.
+     * @param _amount Amount of tokens to distribute.
+     */
+    function distributeTokens(address _to, uint256 _amount) external onlyOwner {
+        require(_to != address(0), "Invalid address");
+        require(_amount >= minContribution && _amount <= maxContribution, "Amount out of range");
+        transferFrom(_to, _amount);
+    }
+
+    /**
+     * @dev Distributes tokens to a recipient address.
+     * @param _to Recipient address
+     * @param _amount Amount of tokens to distribute
+     */
+    function transferFrom(address _to, uint256 _amount) internal {
+        require(tokenContract.transfer(_to, _amount), "Token transfer failed");
+    }
+
+    /**
+     * @dev Determines the current state of the sale based on the current time.
+     * @return The current state of the sale (PreSale, PublicSale, or PostSale).
+     */
+    function getCurrentSaleState() public view returns (SaleState) {
+        if (block.timestamp < publicSaleStartTime) {
+            return SaleState.PreSale;
+        } else {
+            return SaleState.PublicSale;
+        }
+    }
+
+    /**
+     * @dev Calculates the token amount based on the provided ETH amount.
+     * @param ethAmount The amount of ETH for which tokens are to be calculated.
+     * @return The amount of tokens to be received for the given ETH amount.
+     */
+    function calculateTokenAmount(uint256 ethAmount) internal view returns (uint256) {
+        return ethAmount * tokenRatePerEth;
+    }
+
+    /**
+     * @dev Sets the contract state to PostSale. Can only be called by the contract owner.
+     */
+    function setPostSaleState() external onlyOwner {
+        currentSaleState = SaleState.PostSale;
+    }
+
+    /**
+     * @dev Allows contributors to claim refunds under specific conditions.
+     */
+    function claimRefund() external {
+        uint256 amountContributed = contributions[msg.sender];
+        require(amountContributed > 0, "No contribution found");
+
+        if (getCurrentSaleState() == SaleState.PublicSale) {
+            require(totalPresaleEther < presaleCap, "Presale minimum cap met");
+        } else if (currentSaleState == SaleState.PostSale) {
+            require(totalPublicSaleEther < publicSaleCap, "Public Sale minimum cap met");
+        } else {
+            revert("Refund not available");
+        }
+        contributions[msg.sender] = 0;
+        uint256 tokenAmountToBurn = calculateTokenAmount(contributions[msg.sender]);
+        tokenContract.burnFrom(msg.sender, tokenAmountToBurn);
+        payable(msg.sender).transfer(amountContributed);
     }
 }

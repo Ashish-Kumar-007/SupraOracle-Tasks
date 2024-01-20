@@ -1,95 +1,130 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.13;
 
+/**
+ * @title MultiSigWallet
+ * @dev Implementation of a multi-signature wallet. Allows multiple owners to
+ * collectively approve and execute transactions.
+ */
 contract MultiSigWallet {
-    address[] public owners;
-    mapping(address => bool) public isOwner;
-    uint256 public quorum;
+    // Events
+    event Deposit(address indexed sender, uint256 amount);
+    event Submit(uint256 indexed txId);
+    event Approve(address owner, uint256 indexed txId);
+    event Revoke(address indexed owner, uint256 indexed txId);
+    event Execute(uint256 indexed txId);
 
+    /**
+     * @dev Struct to store details of a transaction.
+     */
     struct Transaction {
         address to;
         uint256 value;
         bytes data;
         bool executed;
-        uint256 approvals;
     }
 
+    // State variables
+    mapping(address => bool) public isOwner;
+    uint256 public immutable required;
+    uint256 public immutable ownerCount;
     Transaction[] public transactions;
+    mapping(uint256 => mapping(address => bool)) public approved;
+    mapping(uint256 => uint256) public approvalCounts;
 
-    event TransactionSubmitted(uint256 indexed txIndex, address indexed to, uint256 value, bytes data);
-    event TransactionApproved(uint256 indexed txIndex, address indexed approver);
-    event TransactionCancelled(uint256 indexed txIndex, address indexed canceller);
-    event Execution(uint256 indexed txIndex);
-
+    // Modifiers
     modifier onlyOwner() {
-        require(isOwner[msg.sender], "Not an owner");
+        if (!isOwner[msg.sender]) revert("not owner");
         _;
     }
 
-    modifier transactionExists(uint256 _txIndex) {
-        require(_txIndex < transactions.length, "Transaction does not exist");
+    modifier txExists(uint256 _txId) {
+        if (_txId >= transactions.length) revert("tx does not exist");
         _;
     }
 
-    modifier notExecuted(uint256 _txIndex) {
-        require(!transactions[_txIndex].executed, "Transaction already executed");
+    modifier notApproved(uint256 _txId) {
+        if (approved[_txId][msg.sender]) revert("tx already approved");
         _;
     }
 
-    constructor(address[] memory _owners, uint256 _quorum) {
-        require(_owners.length > 0, "Owners required");
-        require(_quorum > 0 && _quorum <= _owners.length, "Invalid quorum");
+    modifier notExecuted(uint256 _txId) {
+        if (transactions[_txId].executed) revert("tx already executed");
+        _;
+    }
 
-        for (uint256 i = 0; i < _owners.length; i++) {
-            address owner = _owners[i];
-            require(owner != address(0), "Invalid owner address");
-            require(!isOwner[owner], "Duplicate owner");
-            isOwner[owner] = true;
-            owners.push(owner);
+    /**
+     * @dev Constructor to create the MultiSigWallet.
+     * @param _owners Array of addresses to be owners of the wallet.
+     * @param _required Number of required approvals for executing a transaction.
+     */
+    constructor(address[] memory _owners, uint256 _required) {
+        if (_owners.length == 0) revert("owners required");
+        if (!(_required > 0 && _required <= _owners.length)) {
+            revert("invalid required number of owners");
         }
 
-        quorum = _quorum;
-    }
+        for (uint256 i; i < _owners.length; i++) {
+            if (_owners[i] == address(0)) revert("invalid owner");
+            if (isOwner[_owners[i]]) revert("owner is not unique");
 
-    function submitTransaction(address _to, uint256 _value, bytes memory _data) public onlyOwner {
-        uint256 txIndex = transactions.length;
-        Transaction memory newTransaction =
-            Transaction({to: _to, value: _value, data: _data, executed: false, approvals: 0});
-
-        transactions.push(newTransaction);
-        emit TransactionSubmitted(txIndex, _to, _value, _data);
-    }
-
-    function approveTransaction(uint256 _txIndex) public onlyOwner transactionExists(_txIndex) notExecuted(_txIndex) {
-        require(!transactions[_txIndex].executed, "Transaction already executed");
-        require(isOwner[msg.sender], "Not an owner");
-        require(!transactions[_txIndex].approvals & (1 << uint256(msg.sender)), "Already approved");
-
-        transactions[_txIndex].approvals |= (1 << uint256(msg.sender));
-
-        emit TransactionApproved(_txIndex, msg.sender);
-
-        if (transactions[_txIndex].approvals == quorum) {
-            executeTransaction(_txIndex);
+            isOwner[_owners[i]] = true;
         }
+        ownerCount = _owners.length;
+        required = _required;
     }
 
-    function cancelTransaction(uint256 _txIndex) public onlyOwner transactionExists(_txIndex) notExecuted(_txIndex) {
-        require(isOwner[msg.sender], "Not an owner");
-        transactions[_txIndex].executed = true;
-
-        emit TransactionCancelled(_txIndex, msg.sender);
+    /**
+     * @dev Allows the contract to receive funds.
+     */
+    receive() external payable {
+        emit Deposit(msg.sender, msg.value);
     }
 
-    function executeTransaction(uint256 _txIndex) internal {
-        require(transactions[_txIndex].approvals == quorum, "Not enough approvals");
+    /**
+     * @dev Submits a new transaction for approval.
+     * @param _to Recipient address.
+     * @param _value Amount of Ether to send.
+     * @param _data Transaction data.
+     */
+    function submit(address _to, uint256 _value, bytes calldata _data) external onlyOwner {
+        transactions.push(Transaction({to: _to, value: _value, data: _data, executed: false}));
+        emit Submit(transactions.length - 1);
+    }
 
-        Transaction storage transaction = transactions[_txIndex];
+    /**
+     * @dev Approves a transaction.
+     * @param _txId Transaction ID.
+     */
+    function approve(uint256 _txId) external onlyOwner txExists(_txId) notApproved(_txId) notExecuted(_txId) {
+        approved[_txId][msg.sender] = true;
+        approvalCounts[_txId]++;
+        emit Approve(msg.sender, _txId);
+    }
+
+    /**
+     * @dev Executes a transaction if it has the required number of approvals.
+     * @param _txId Transaction ID.
+     */
+    function execute(uint256 _txId) external txExists(_txId) notExecuted(_txId) {
+        if (approvalCounts[_txId] < required) revert("approvals count < required count");
+
+        Transaction storage transaction = transactions[_txId];
         transaction.executed = true;
 
         (bool success,) = transaction.to.call{value: transaction.value}(transaction.data);
-        require(success, "Transaction execution failed");
+        if (!success) revert("tx failed");
 
-        emit Execution(_txIndex);
+        emit Execute(_txId);
+    }
+
+    /**
+     * @dev Revokes approval for a transaction.
+     * @param _txId Transaction ID.
+     */
+    function revoke(uint256 _txId) external onlyOwner txExists(_txId) notExecuted(_txId) {
+        if (!approved[_txId][msg.sender]) revert("tx not approved");
+        approved[_txId][msg.sender] = false;
+        emit Revoke(msg.sender, _txId);
     }
 }

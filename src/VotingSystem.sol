@@ -23,8 +23,8 @@ contract VotingSystem is Ownable {
     mapping(address => Voter) private voters;
 
     event voted(address user, uint256 candidateId, bool voted);
-    event candidateAdded(uint candidateId, string name);
-    event candidateDetails(uint candidateId, string name, uint voteCount);
+    event candidateAdded(uint256 candidateId, string name);
+    event candidateDetails(uint256 candidateId, string name, uint256 voteCount);
     event userRegistered(address user, bool registered);
     event Winner(uint256 candidateId);
 
@@ -48,10 +48,10 @@ contract VotingSystem is Ownable {
         candidates[candidatesCount] = Candidate(_name, 0);
         candidatesCount += 1;
 
-        emit candidateAdded(candidatesCount-1, _name);
+        emit candidateAdded(candidatesCount - 1, _name);
     }
 
-    function register() public {
+    function registerVoter() public {
         require(!voters[msg.sender].isRegistered, "Already registered");
         voters[msg.sender].isRegistered = true;
 
@@ -79,7 +79,7 @@ contract VotingSystem is Ownable {
         return winningCandidateId;
     }
 
-    function getCandidateDetails(uint _candidateId) public view returns (Candidate memory) {
+    function getCandidateDetails(uint256 _candidateId) public view returns (Candidate memory) {
         require(block.timestamp >= deadline, "Voting is still open");
         emit candidateDetails(_candidateId, candidates[_candidateId].name, candidates[_candidateId].voteCount);
         return candidates[_candidateId];
